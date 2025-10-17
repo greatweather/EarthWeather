@@ -1,0 +1,5 @@
+{
+  "name": "WebGL Earth Weather Education",
+  "description": "An interactive 3D globe built with React and Three.js that displays real-time satellite cloud imagery and provides weather forecasts for any location. This educational tool allows users to explore our planet and understand weather patterns.",
+  "requestFramePermissions": []
+}
