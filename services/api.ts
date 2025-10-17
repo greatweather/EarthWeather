@@ -1,4 +1,4 @@
-import { Coordinates, WeatherData } from '../types';
+import { WeatherData } from '../types';
 
 const WMO_CODES: { [key: number]: { description: string; icon: string } } = {
     0: { description: 'Clear sky', icon: '☀️' },
@@ -31,41 +31,17 @@ const WMO_CODES: { [key: number]: { description: string; icon: string } } = {
     99: { description: 'Thunderstorm with heavy hail', icon: '⛈️' },
 };
 
-
-export interface WeatherApiResponse {
-    weather: WeatherData;
-    coords: Coordinates;
+export interface LocationData {
+    lat: number;
+    lon: number;
+    city: string;
+    country: string;
 }
 
-/**
- * Translates a given text to English using the free MyMemory API.
- * @param text The text to translate.
- * @returns The English translation.
- */
-async function translateToEnglish(text: string): Promise<string> {
-    try {
-        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=zh|en`;
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Translation service responded with status: ${response.status}`);
-        }
-        const data = await response.json();
-        if (data.responseStatus !== 200 || !data.responseData.translatedText) {
-            throw new Error(data.responseDetails || 'MyMemory API returned an error or empty translation.');
-        }
-        return data.responseData.translatedText;
-    } catch (error) {
-        console.error("Translation failed:", error);
-        throw new Error(`Failed to translate city name: ${text}`);
-    }
-}
-
-
-export const getWeather = async (query: string): Promise<WeatherApiResponse> => {
+export const geocodeLocation = async (query: string): Promise<LocationData> => {
     try {
         let lat: number, lon: number;
         let city: string, country: string;
-        const originalCityQuery = query;
 
         const coordsRegex = /^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/;
         const isCoords = coordsRegex.test(query);
@@ -87,14 +63,7 @@ export const getWeather = async (query: string): Promise<WeatherApiResponse> => 
                 country = geoData.results[0].country_code;
             }
         } else {
-            let searchQuery = query;
-            // NEW: Translate Chinese queries to English before searching
-            if (/[\u4e00-\u9fa5]/.test(query)) {
-                searchQuery = await translateToEnglish(query);
-            }
-
-            // Use the (potentially translated) search query. Force language to 'en' for best results.
-            const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=1&language=en`);
+            const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=zh,en`);
             if (!geoResponse.ok) throw new Error(`Could not find location: ${query}`);
             const geoData = await geoResponse.json();
             
@@ -104,10 +73,23 @@ export const getWeather = async (query: string): Promise<WeatherApiResponse> => 
             const location = geoData.results[0];
             lat = location.latitude;
             lon = location.longitude;
-            city = location.name; // This will be the English name from the API
+            city = location.name;
             country = location.country_code;
         }
-        
+
+        return { lat, lon, city, country };
+
+    } catch (e) {
+        console.error("Error geocoding location:", e);
+        if (e instanceof Error && e.message.includes('Could not find location')) {
+            throw e;
+        }
+        throw new Error("Failed to find location. The service may be unavailable.");
+    }
+};
+
+export const fetchWeatherForLocation = async (lat: number, lon: number, city: string, country: string): Promise<WeatherData> => {
+     try {
         const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&timezone=auto&wind_speed_unit=ms`;
         const aqiUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=us_aqi`;
 
@@ -133,11 +115,8 @@ export const getWeather = async (query: string): Promise<WeatherApiResponse> => 
         const wmoCode = weatherDataJson.current.weather_code;
         const weatherInfo = WMO_CODES[wmoCode] || { description: 'Unknown', icon: '🌍' };
         
-        // IMPORTANT: Display the original Chinese query on the card if that's what the user typed.
-        const displayCity = /[\u4e00-\u9fa5]/.test(originalCityQuery) ? originalCityQuery : city;
-
-        const weather: WeatherData = {
-            city: displayCity,
+        return {
+            city,
             country,
             temperature: Math.round(weatherDataJson.current.temperature_2m),
             humidity: weatherDataJson.current.relative_humidity_2m,
@@ -148,15 +127,8 @@ export const getWeather = async (query: string): Promise<WeatherApiResponse> => 
             minTemp: Math.round(weatherDataJson.daily.temperature_2m_min[0]),
             aqi: aqiDataJson?.current?.us_aqi ?? 0,
         };
-        
-        const coords: Coordinates = { lat, lon };
-
-        return { weather, coords };
-    } catch (e) {
+    } catch(e) {
         console.error("Error fetching weather:", e);
-        if (e instanceof Error && (e.message.includes('Could not find location') || e.message.includes('Failed to translate'))) {
-            throw e;
-        }
         throw new Error("Failed to get weather data. The service may be unavailable.");
     }
 };

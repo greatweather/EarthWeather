@@ -1,19 +1,33 @@
+
 import React from 'react';
 import { SearchBar } from './SearchBar';
+import { City } from '../types';
 
 interface HudProps {
     isLoading: boolean;
-    onSearch: (city: string) => void;
+    onSearch: (search: { query: string } | { city: City }) => void;
+    loadingStatus: { message: string; progress: number } | null;
 }
 
 // Renamed to HudComponent to be wrapped by React.memo
-const HudComponent: React.FC<HudProps> = ({ isLoading, onSearch }) => {
+const HudComponent: React.FC<HudProps> = ({ isLoading, onSearch, loadingStatus }) => {
     return (
         <div className="absolute top-0 left-0 w-full h-full p-4 md:p-8 pointer-events-none z-20 flex flex-col justify-between">
-            <header className="w-full flex justify-center">
+            <header className="w-full flex flex-col items-center">
                 <h1 className="font-orbitron text-2xl md:text-4xl text-white text-center tracking-widest uppercase" style={{ textShadow: '0 0 10px #00e0ff' }}>
                     Earth Weather Explorer
                 </h1>
+                {loadingStatus && (
+                    <div className="mt-2 text-center">
+                        <p className="text-sm text-cyan-200 mb-1 animate-pulse">{loadingStatus.message}</p>
+                        <div className="w-48 h-2 bg-white/20 rounded-full overflow-hidden mx-auto">
+                            <div
+                                className="h-full bg-cyan-400 rounded-full transition-all duration-300 ease-linear"
+                                style={{ width: `${loadingStatus.progress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                )}
             </header>
 
             {/* This empty main acts as a spacer to push the footer down */}

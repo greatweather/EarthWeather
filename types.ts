@@ -1,4 +1,3 @@
-
 export interface Coordinates {
     lat: number;
     lon: number;
@@ -22,4 +21,14 @@ export interface Star {
     y: number;
     z: number;
     speed: number;
+}
+
+export interface City {
+    name_en: string;
+    name_zh: string;
+    country_en: string;
+    country_zh: string;
+    country_code: string;
+    lat: number;
+    lon: number;
 }
