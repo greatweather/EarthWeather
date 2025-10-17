@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Coordinates } from '../types';
@@ -13,20 +13,6 @@ interface GlobeProps {
     startCloudLoading: boolean;
     countryCode: string | null;
 }
-
-// Convert Lat/Lon to 3D coordinates. Moved to module scope for performance.
-const latLonToVector3 = (lat: number, lon: number, radius: number): THREE.Vector3 => {
-    const phi = (90 - lat) * (Math.PI / 180);
-    const theta = (lon + 180) * (Math.PI / 180);
-    const x = -(radius * Math.sin(phi) * Math.cos(theta));
-    const z = radius * Math.sin(phi) * Math.sin(theta);
-    const y = radius * Math.cos(phi);
-    return new THREE.Vector3(x, y, z);
-};
-
-// Simple module-level cache for GeoJSON data to prevent re-fetching
-const geoJsonCache: { [key: string]: any } = {};
-
 
 export const Globe: React.FC<GlobeProps> = ({ 
     targetCoordinates, 
@@ -47,23 +33,16 @@ export const Globe: React.FC<GlobeProps> = ({
     const controlsRef = useRef<OrbitControls | null>(null);
     const markerRef = useRef<THREE.Mesh | null>(null);
     const borderRef = useRef<THREE.Group | null>(null);
-
-    // Memoize materials so they are not recreated on every render.
-    // They are disposed in the main useEffect's cleanup function.
-    const borderMaterials = useMemo(() => ({
-        core: new THREE.LineBasicMaterial({
-            color: 0x99ffff, // A bright, light cyan for the core line
-            transparent: true,
-            opacity: 1.0,
-            depthTest: false, // Render on top
-        }),
-        glow: new THREE.LineBasicMaterial({
-            color: 0x00e0ff, // The main glow color
-            transparent: true,
-            opacity: 0.4,
-            depthTest: false, // Render on top
-        }),
-    }), []);
+    
+    // Convert Lat/Lon to 3D coordinates
+    const latLonToVector3 = (lat: number, lon: number, radius: number): THREE.Vector3 => {
+        const phi = (90 - lat) * (Math.PI / 180);
+        const theta = (lon + 180) * (Math.PI / 180);
+        const x = -(radius * Math.sin(phi) * Math.cos(theta));
+        const z = radius * Math.sin(phi) * Math.sin(theta);
+        const y = radius * Math.cos(phi);
+        return new THREE.Vector3(x, y, z);
+    };
     
     useEffect(() => {
         if (!mountRef.current) return;
@@ -209,9 +188,6 @@ export const Globe: React.FC<GlobeProps> = ({
             mountRef.current?.removeChild(renderer.domElement);
             renderer.dispose();
             controls.dispose();
-            // Clean up memoized materials on component unmount
-            borderMaterials.core.dispose();
-            borderMaterials.glow.dispose();
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -283,7 +259,8 @@ export const Globe: React.FC<GlobeProps> = ({
         const intervalId = setInterval(updateSatelliteImage, 600000); // 10 minutes
 
         return () => clearInterval(intervalId);
-    }, [startCloudLoading, onCloudProgress, onCloudsLoaded]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [startCloudLoading]);
 
     // Animate to target and place marker
     useEffect(() => {
@@ -359,113 +336,82 @@ export const Globe: React.FC<GlobeProps> = ({
         }
     }, [targetCoordinates]);
 
-    // Fetch and draw country border with a glow effect
+    // Fetch and draw country border
     useEffect(() => {
         const scene = sceneRef.current;
         if (!scene) return;
-    
-        // Helper to dispose of all geometry and materials in a group
+
         const cleanupBorder = () => {
             if (borderRef.current) {
                 scene.remove(borderRef.current);
-                borderRef.current.traverse((object) => {
-                    const line = object as THREE.Line;
-                    if (line.isLine && line.geometry) {
-                        line.geometry.dispose();
+                borderRef.current.children.forEach((child: any) => {
+                    child.geometry?.dispose();
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach((m: THREE.Material) => m.dispose());
+                    } else {
+                        child.material?.dispose();
                     }
                 });
                 borderRef.current = null;
             }
         };
-    
-        const drawBorder = (geoJson: any) => {
-            cleanupBorder();
-            if (!sceneRef.current) return;
-    
-            const borderGroup = new THREE.Group();
-            borderGroup.renderOrder = 1; // Render on top
-            const radius = 5.08; // Slightly above clouds
-    
-            const drawPolygon = (coordinates: number[][]) => {
-                if (!coordinates || coordinates.length < 2) return;
-                const points = coordinates.map(coord => latLonToVector3(coord[1], coord[0], radius));
-                const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    
-                const coreLine = new THREE.Line(geometry, borderMaterials.core);
-                const glowLine = new THREE.Line(geometry.clone(), borderMaterials.glow);
-                glowLine.scale.setScalar(1.005);
-    
-                borderGroup.add(coreLine);
-                borderGroup.add(glowLine);
-            };
-    
-            if (!geoJson || !geoJson.type) {
-                console.error("Invalid GeoJSON object received.");
-                return;
-            }
-    
-            const features = geoJson.type === 'FeatureCollection'
-                ? geoJson.features
-                : (geoJson.type === 'Feature' ? [geoJson] : []);
-    
-            if (!features || features.length === 0) {
-                console.error("No features found in GeoJSON data for border.");
-                return;
-            }
-    
-            features.forEach((feature: any) => {
-                if (!feature || !feature.geometry || !feature.geometry.coordinates) return;
-    
-                const { type, coordinates } = feature.geometry;
-    
-                if (type === 'Polygon') {
-                    coordinates.forEach((polygon: number[][]) => drawPolygon(polygon));
-                } else if (type === 'MultiPolygon') {
-                    coordinates.forEach((multiPolygon: number[][][]) => {
-                        multiPolygon.forEach((polygon: number[][]) => drawPolygon(polygon));
-                    });
-                }
-            });
-    
-            if (borderGroup.children.length > 0) {
-                sceneRef.current.add(borderGroup);
-                borderRef.current = borderGroup;
-            }
-        };
-    
-        let isCancelled = false;
-    
+
         if (countryCode) {
-            const code = countryCode.toUpperCase();
-            if (geoJsonCache[code]) {
-                drawBorder(geoJsonCache[code]);
-            } else {
-                const resolution = '60M';
-                fetch(`https://gisco-services.ec.europa.eu/distribution/v2/countries/geojson/${code}_${resolution}.geojson`)
-                    .then(res => {
-                        if (!res.ok) throw new Error(`Failed to fetch border for ${code} (${res.status})`);
-                        return res.json();
-                    })
-                    .then(geoJson => {
-                        if (isCancelled) return;
-                        geoJsonCache[code] = geoJson;
-                        drawBorder(geoJson);
-                    })
-                    .catch(err => {
-                        if (isCancelled) return;
-                        console.error("Failed to fetch/draw country border:", err);
-                        cleanupBorder();
+            fetch(`https://geojson-maps.ash.ms/countries-cctld/${countryCode.toUpperCase()}.json`)
+                .then(res => {
+                    if (!res.ok) throw new Error(`Failed to fetch border for ${countryCode}`);
+                    return res.json();
+                })
+                .then(geoJson => {
+                    cleanupBorder(); // Clean up previous border before drawing a new one
+                    if (!sceneRef.current) return;
+
+                    const borderGroup = new THREE.Group();
+                    const borderMaterial = new THREE.LineBasicMaterial({
+                        color: 0x00e0ff,
+                        transparent: true,
+                        opacity: 0.9,
                     });
-            }
+
+                    const radius = 5.08; // Slightly above clouds
+
+                    const drawPolygon = (coordinates: number[][]) => {
+                        const points = coordinates.map(coord => latLonToVector3(coord[1], coord[0], radius));
+                        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                        return new THREE.Line(geometry, borderMaterial);
+                    };
+
+                    const geometry = geoJson.geometry;
+                    if (geometry.type === 'Polygon') {
+                        geometry.coordinates.forEach((polygon: any) => {
+                            borderGroup.add(drawPolygon(polygon));
+                        });
+                    } else if (geometry.type === 'MultiPolygon') {
+                        geometry.coordinates.forEach((multiPolygon: any) => {
+                            multiPolygon.forEach((polygon: any) => {
+                                borderGroup.add(drawPolygon(polygon));
+                            });
+                        });
+                    }
+                    
+                    sceneRef.current.add(borderGroup);
+                    borderRef.current = borderGroup;
+                })
+                .catch(err => {
+                    console.error("Failed to fetch/draw country border:", err);
+                    cleanupBorder();
+                });
         } else {
             cleanupBorder();
         }
-    
+        
         return () => {
-            isCancelled = true;
-            cleanupBorder();
+            if (sceneRef.current) {
+                cleanupBorder();
+            }
         };
-    }, [countryCode, borderMaterials]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [countryCode]);
 
     return <div ref={mountRef} className="absolute top-0 left-0 w-full h-full z-10" />;
 };
